@@ -329,8 +329,10 @@ def parse_grades(comment: str) -> dict[int, dict]:
     return grades
 
 
-def _score_table(graded: list[tuple[int, dict, dict]]) -> list[str]:
-    """One row per cell: mean rating and the band histogram."""
+def _score_table(graded: list[tuple[int, dict, dict]], cells: list[str]) -> list[str]:
+    """One row per cell: mean rating and the band histogram. `cells` may
+    include ones with no graded items (a generate job that produced
+    nothing) -- those get a dash row instead of silently vanishing."""
     per_cell: dict[str, list[int]] = {}
     for _, item, g in graded:
         per_cell.setdefault(item["cell"], []).append(g["rating"])
@@ -338,7 +340,11 @@ def _score_table(graded: list[tuple[int, dict, dict]]) -> list[str]:
         "| Cell | Items | Mean | " + " | ".join(b for b, _, _ in BANDS) + " |",
         "|------|------:|-----:|" + "".join("----:|" for _ in BANDS),
     ]
-    for cell, ratings in sorted(per_cell.items()):
+    for cell in cells:
+        ratings = per_cell.get(cell)
+        if not ratings:
+            lines.append(f"| {cell} | 0 | - | " + " | ".join("-" for _ in BANDS) + " |")
+            continue
         counts = [sum(1 for r in ratings if lo <= r <= hi) for _, lo, hi in BANDS]
         mean = sum(ratings) / len(ratings)
         lines.append(
@@ -375,13 +381,29 @@ def _category_table(
     return lines
 
 
-def render_grades(items: list[dict], comment: str) -> str:
+def render_grades(
+    items: list[dict], comment: str, expected_cells: list[str] = ()
+) -> str:
     """Two tables instead of 100 rows of prose: scores per cell, then a
-    breakdown of what the deductions were for."""
+    breakdown of what the deductions were for.
+
+    `expected_cells` are the device x model matrix's base cell names
+    (`{model}-{device}`, no compute suffix -- the caller doesn't know
+    ahead of time whether a job would have split into more than one). Any
+    not matched by an actual item, exactly or as a `-{compute}` prefix,
+    get a dash row: a generate job that produced nothing should show up
+    as missing, not vanish from the table."""
     grades = parse_grades(comment)
     graded = [(i, item, grades[i]) for i, item in enumerate(items) if i in grades]
+    present = {item["cell"] for item in items}
+    missing_cells = [
+        c
+        for c in expected_cells
+        if c not in present and not any(p.startswith(c + "-") for p in present)
+    ]
+    cells = sorted({item["cell"] for _, item, _ in graded} | set(missing_cells))
     lines = ["## Breeze grading results", ""]
-    if not graded:
+    if not graded and not cells:
         lines += [
             "> No parseable `| Item | Rating | Category | Note |` rows in the",
             "> grader comment — see the issue for the raw agent output.",
@@ -389,8 +411,7 @@ def render_grades(items: list[dict], comment: str) -> str:
         ]
         return "\n".join(lines)
     missing = len(items) - len(graded)
-    cells = sorted({item["cell"] for _, item, _ in graded})
-    lines += _score_table(graded) + [""]
+    lines += _score_table(graded, cells) + [""]
     if missing:
         lines += [f"> {missing} of {len(items)} items came back ungraded.", ""]
     lines += ["### Deductions", ""]
@@ -979,6 +1000,12 @@ def main() -> int:
         type=Path,
         help="report mode: the grader's result comment",
     )
+    p.add_argument(
+        "--expected-cells",
+        default="",
+        help="report mode: comma-separated `{model}-{device}` base cell names "
+        "to show even when the generate job produced no items for them",
+    )
     args = p.parse_args()
 
     # Host-side modes read artifacts the device runs left behind; they need
@@ -998,7 +1025,10 @@ def main() -> int:
             out.with_name("grade-item-map.md").write_text(render_item_map(items))
         else:
             grades = _require(args.grades_in, "--grades-in")
-            write_summary(render_grades(items, grades.read_text()))
+            expected_cells = [
+                c.strip() for c in args.expected_cells.split(",") if c.strip()
+            ]
+            write_summary(render_grades(items, grades.read_text(), expected_cells))
         return 0
 
     if _qdc is None:
