@@ -179,6 +179,7 @@ jobs:
           path: items
 
       - name: Note any missing generate jobs
+        id: missing-check
         env:
           DEVICES: ${{ needs.load-models.outputs.devices }}
           MATRIX: ${{ needs.load-models.outputs.matrix }}
@@ -190,6 +191,12 @@ jobs:
           if [ "$got" -lt "$expected" ]; then
             echo "> $((expected - got)) of $expected generate jobs produced no items." >> "$GITHUB_STEP_SUMMARY"
           fi
+          # Every {model}-{device} the matrix should have produced, so the grade
+          # report can show a dash row for whichever one(s) came back empty
+          # instead of just dropping them.
+          expected_cells=$(jq -cn --argjson d "$DEVICES" --argjson m "$MATRIX" -r \
+            '[$d[] as $dev | $m[] as $mo | "\($mo.name)-\($dev)"] | join(",")')
+          echo "expected_cells=$expected_cells" >> "$GITHUB_OUTPUT"
 
       - name: Render grading payload
         run: |
@@ -278,6 +285,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ISSUE: ${{ steps.issue.outputs.number }}
           ISSUE_URL: ${{ steps.issue.outputs.url }}
+          EXPECTED_CELLS: ${{ steps.missing-check.outputs.expected_cells }}
         run: |
           set -euo pipefail
           # Breeze edits its comment in place, so a finished run does not mean
@@ -297,7 +305,8 @@ jobs:
           python sdk/benchmark/qdc/run_qdc_jobs.py \
             --mode accuracy_report \
             --in-dir items \
-            --grades-in grades.md
+            --grades-in grades.md \
+            --expected-cells "$EXPECTED_CELLS"
 
       - uses: actions/upload-artifact@v7
         id: grades-artifact
