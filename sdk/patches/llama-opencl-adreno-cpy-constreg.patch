@@ -1,3 +1,24 @@
+diff --git a/ggml/src/ggml-opencl/kernels/add.cl b/ggml/src/ggml-opencl/kernels/add.cl
+index 509bf1734..3d72cb84a 100644
+--- a/ggml/src/ggml-opencl/kernels/add.cl
++++ b/ggml/src/ggml-opencl/kernels/add.cl
+@@ -55,7 +55,14 @@ kernel void kernel_add(
+     global char * src1_ptr = src1 + i13*nb13 + i12*nb12 + i11*nb11;
+     global char * dst_ptr  = dst  + i03*nb3  + i02*nb2  + i01*nb1;
+ 
+-    for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
++    // Adreno's instruction validator rejects the strength-reduced step
++    // `get_local_size(0) * nb0X`: get_local_size(0) is a constant-class
++    // register, nb0X a uniform-class one, and the resulting UMULLrr still
++    // trips "# of constant registers must be < 2". Force lsz into a GPR via
++    // volatile to break the pairing, same fix as kernel_cpy_f32_f32_pack.
++    volatile int lsz_v = get_local_size(0);
++    int lsz = lsz_v;
++    for (int i0 = get_local_id(0); i0 < ne0; i0 += lsz) {
+         const int i10 = i0 % ne10;
+         *((global float *)(dst_ptr + i0*nb0)) = *((global float *)(src0_ptr + i0*nb00)) + *((global float *)(src1_ptr + i10*nb10));
+     }
+ }
 diff --git a/ggml/src/ggml-opencl/kernels/cpy.cl b/ggml/src/ggml-opencl/kernels/cpy.cl
 index adbd2e766..89aeb1cca 100644
 --- a/ggml/src/ggml-opencl/kernels/cpy.cl

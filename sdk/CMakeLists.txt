@@ -144,7 +144,11 @@ enable_testing()
 # * llama-opencl-adreno-cpy-constreg.patch works around an Adreno OpenCL
 #   compiler crash: kernel_cpy_f32_f32_pack's min(ne00, get_local_size(0))
 #   emits an IMINrr with two constant-class operands, which the driver's
-#   instruction validator rejects (NumConstRegsError). See GenieX #1250.
+#   instruction validator rejects (NumConstRegsError). See GenieX #1250. The
+#   same fix is applied to kernel_add: the strength-reduced
+#   get_local_size(0) * nb0X step emits an equivalent UMULLrr, hit on a
+#   QCS9075 board (Adreno driver 1.855.3) during VLM inference. See
+#   qcom-ai-hub/geniex#1566.
 # * llama-zero-free-mem-even-split.patch keeps load_tensors from throwing when
 #   every device reports 0 free memory: the splits normalize to NaN and the
 #   device lookup runs off the end. Adreno 643 on QCS6490 hits it because the
